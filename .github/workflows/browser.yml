@@ -1,0 +1,91 @@
+# The browser player: Strata's WebGL 2 backend through Emscripten 6.0.11 (Strata's pin), the
+# decoder tests as wasm under Node, the size budget, and a smoke test in headless Chromium on a
+# desktop and a phone profile (the checks of usd-web's own replay smoke test).
+name: Browser build
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: browser-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # RFC 0025 §9 (proposed budget): the gzip'd .wasm at most 600 KB.
+  WASM_GZIP_BUDGET: "614400"
+
+jobs:
+  browser:
+    name: Web build and smoke test (headless Chromium)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up emsdk 6.0.11 (Strata's pin)
+        run: |
+          git clone -q --depth 1 https://github.com/emscripten-core/emsdk.git "$RUNNER_TEMP/emsdk"
+          "$RUNNER_TEMP/emsdk/emsdk" install 6.0.11
+          "$RUNNER_TEMP/emsdk/emsdk" activate 6.0.11
+
+      - name: Configure and build
+        run: |
+          source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
+          emcmake cmake -S . -B build-web -DCMAKE_BUILD_TYPE=Release -DREPLAY_PLAYER_WEB=ON \
+            -DREPLAY_PLAYER_WITH_STRATA=OFF -DREPLAY_PLAYER_WARNINGS_AS_ERRORS=ON -Wno-dev
+          cmake --build build-web -j "$(nproc)"
+
+      - name: Decoder and playback tests as wasm (Node)
+        run: |
+          source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
+          ctest --test-dir build-web --output-on-failure
+
+      - name: Assemble the site
+        run: |
+          mkdir -p web-site/data
+          cp web/index.html build-web/replay-player.js build-web/replay-player.wasm web-site/
+          cp -r tests/data/scenario web-site/data/scenario
+          for d in tests/corpus/*/; do cp -r "$d" "web-site/data/$(basename "$d")"; done
+          ls -lR web-site | head -40
+
+      - name: Size budget (gzip'd .wasm)
+        run: |
+          wasm=$(stat -c %s web-site/replay-player.wasm)
+          gz=$(gzip -9 -c web-site/replay-player.wasm | wc -c)
+          js=$(gzip -9 -c web-site/replay-player.js | wc -c)
+          echo "replay-player.wasm: $wasm bytes, $gz gzip'd (budget $WASM_GZIP_BUDGET); replay-player.js: $js gzip'd"
+          echo "### Browser size" >> "$GITHUB_STEP_SUMMARY"
+          echo "replay-player.wasm: $wasm bytes, **$gz gzip'd** (budget $WASM_GZIP_BUDGET); .js $js gzip'd" >> "$GITHUB_STEP_SUMMARY"
+          test "$gz" -le "$WASM_GZIP_BUDGET"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Playwright and Chromium
+        working-directory: web/smoke
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Smoke test (desktop, then a phone profile)
+        run: |
+          python3 -m http.server 8080 --bind 127.0.0.1 --directory web-site > http.log 2>&1 &
+          sleep 1
+          node web/smoke/smoke.cjs http://127.0.0.1:8080/ data/scenario/ smoke-out/scenario
+          node web/smoke/smoke.cjs http://127.0.0.1:8080/ data/steading-seed42/ smoke-out/steading
+          node web/smoke/capture.cjs http://127.0.0.1:8080/ data/kindling-restoration/ 11700 smoke-out/kindling.png --dark
+
+      - name: Upload smoke screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-smoke
+          path: smoke-out/
+          if-no-files-found: ignore

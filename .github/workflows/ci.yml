@@ -1,0 +1,218 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  # usd-web's Python decoder, the reference the C++ decoder is compared with (tests/cross_decode.py).
+  USD_WEB_REF: 4b4b8b810995a301a8e9fd8e197533bd96141ce0  # v0.2.1
+  # OpenUSD v26.08 as Strata publishes it for its pinned build (modules/usd/openusd/openusd.lock there).
+  OPENUSD_KEY: openusd-v26.08-ubuntu24.04-gcc13-cdd5cf8adfa8
+  OPENUSD_SHA256: 4e91ed5e41ec355f3fc766173dcea61bf6716c1aa8cdc2a4df61e70f92066545
+
+jobs:
+  core:
+    # The model, the bundle decoder and playback: no engine, no GPU.
+    name: Decoder and playback (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build (warnings as errors, no engine)
+        shell: bash
+        run: |
+          cmake -S . -B build -DREPLAY_PLAYER_WITH_STRATA=OFF -DREPLAY_PLAYER_WARNINGS_AS_ERRORS=ON -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --config Release --parallel 4
+      - name: Tests
+        run: ctest --test-dir build -C Release --output-on-failure
+
+  cross-decode:
+    # The C++ UWR1 decoder against usd-web's Python decoder, on the test bundles and on bundles
+    # usd-web makes here from the corpus replays.
+    name: Cross-decoder (C++ vs usd-web's Python)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install usd-web (pinned) and ruff
+        run: python -m pip install --quiet "usd-web @ git+https://github.com/Preponderous-Software/usd-web@${USD_WEB_REF}" "ruff==0.17.1"
+      - name: Lint the Python tools
+        run: |
+          ruff check tests tools
+          ruff format --check tests tools
+      - name: Build replay-decode
+        run: |
+          cmake -S . -B build -DREPLAY_PLAYER_WITH_STRATA=OFF -DREPLAY_PLAYER_BUILD_TESTS=OFF -DREPLAY_PLAYER_WARNINGS_AS_ERRORS=ON
+          cmake --build build -j 4 --target replay-decode
+      - name: Fresh bundles from the corpus (thinned and not, small chunks)
+        run: |
+          for f in tests/corpus/*.usdc tests/data/scenario.usda; do
+            n=$(basename "${f%.*}")
+            usd-web replay "$f" -o "fresh/$n"
+            usd-web replay "$f" -o "fresh/$n-every3" --every 3 --chunk-kb 2
+          done
+      - name: Both decoders agree on every chunk
+        run: python tests/cross_decode.py --decode build/replay-decode tests/data/scenario tests/data/scenario-every3 tests/corpus/*/ fresh/*/
+
+  desktop:
+    # The desktop player on Strata v0.5.0, headless on llvmpipe: every corpus replay drawn at fixed
+    # ticks and compared with the goldens by Strata's strata-imgcmp.
+    name: Desktop player (Linux, headless goldens)
+    runs-on: ubuntu-24.04
+    env:
+      LIBGL_ALWAYS_SOFTWARE: "1"
+      GALLIUM_DRIVER: llvmpipe
+      __EGL_VENDOR_LIBRARY_FILENAMES: /usr/share/glvnd/egl_vendor.d/50_mesa.json
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install SDL3 build dependencies and Mesa
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            libx11-dev libxext-dev libxcursor-dev libxi-dev libxfixes-dev libxrandr-dev libxss-dev \
+            libegl-dev libgl-dev libegl1 libegl-mesa0 libgl1-mesa-dri
+      - name: Build the player and Strata's strata-imgcmp
+        run: |
+          cmake -S . -B build -DREPLAY_PLAYER_WARNINGS_AS_ERRORS=ON -DREPLAY_PLAYER_STRATA_TOOLS=ON -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j "$(nproc)" --target replay-player strata-imgcmp
+      - name: Every corpus bundle loads (--info)
+        run: for d in tests/data/scenario tests/corpus/*/; do ./build/replay-player "$d" --info; done
+      - name: Render the goldens from the bundles
+        run: tests/golden/render.sh "$PWD/build/replay-player" renders bundle
+      - name: Compare with the goldens (strata-imgcmp)
+        run: |
+          imgcmp=$(find build -name strata-imgcmp -type f | head -1)
+          status=0
+          for g in tests/golden/*.png; do
+            "$imgcmp" "$g" "renders/$(basename "$g")" --diff "renders/diff-$(basename "$g")" --json || status=1
+            echo
+          done
+          exit $status
+      - name: A playback GIF's frames render (one second at 12 fps)
+        run: |
+          mkdir -p frames
+          ./build/replay-player tests/corpus/kindling-restoration --frames frames --count 12 --fps 12 --speed 8 \
+            --width 320 --height 180
+          test "$(ls frames/*.png | wc -l)" -eq 12
+      - name: Upload the renders
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-renders
+          path: renders/
+          if-no-files-found: ignore
+
+  desktop-usd:
+    # .usda/.usdc opened natively through usd-recorder's C++ reader (OpenUSD v26.08, Strata's
+    # prebuilt). The native model must equal the bundle's up to quantization, and its renders
+    # must match the same goldens.
+    name: Desktop player with OpenUSD (Linux)
+    runs-on: ubuntu-24.04
+    env:
+      LIBGL_ALWAYS_SOFTWARE: "1"
+      GALLIUM_DRIVER: llvmpipe
+      __EGL_VENDOR_LIBRARY_FILENAMES: /usr/share/glvnd/egl_vendor.d/50_mesa.json
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install SDL3 build dependencies and Mesa
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            libx11-dev libxext-dev libxcursor-dev libxi-dev libxfixes-dev libxrandr-dev libxss-dev \
+            libegl-dev libgl-dev libegl1 libegl-mesa0 libgl1-mesa-dri
+      - name: Fetch OpenUSD (Strata's prebuilt, SHA-256 checked)
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/openusd.tar.gz" \
+            "https://github.com/Preponderous-Software/strata/releases/download/${OPENUSD_KEY}/${OPENUSD_KEY}.tar.gz"
+          echo "${OPENUSD_SHA256}  $RUNNER_TEMP/openusd.tar.gz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/openusd"
+          tar -C "$RUNNER_TEMP/openusd" -xzf "$RUNNER_TEMP/openusd.tar.gz"
+          echo "OPENUSD_DIR=$RUNNER_TEMP/openusd/${OPENUSD_KEY}" >> "$GITHUB_ENV"
+      - name: Build the player with the USD reader
+        run: |
+          cmake -S . -B build -DREPLAY_PLAYER_WITH_USD=ON -DREPLAY_PLAYER_WARNINGS_AS_ERRORS=ON \
+            -DREPLAY_PLAYER_STRATA_TOOLS=ON -DREPLAY_PLAYER_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$OPENUSD_DIR"
+          cmake --build build -j "$(nproc)" --target replay-player replay-compare strata-imgcmp
+      - name: Native and bundle models agree (committed bundles and fresh ones)
+        run: |
+          python -m pip install --quiet "usd-web @ git+https://github.com/Preponderous-Software/usd-web@${USD_WEB_REF}"
+          ./build/replay-compare tests/data/scenario.usda tests/data/scenario
+          for f in tests/corpus/*.usdc; do
+            ./build/replay-compare "$f" "${f%.usdc}"
+            usd-web replay "$f" -o "fresh/$(basename "${f%.usdc}")" --chunk-kb 4
+            ./build/replay-compare "$f" "fresh/$(basename "${f%.usdc}")"
+          done
+      - name: A replay that is not usd-replay/1 is refused, not drawn
+        run: |
+          printf '#usda 1.0\n(\n    defaultPrim = "World"\n)\ndef Xform "World" {}\n' > not-a-replay.usda
+          if ./build/replay-player not-a-replay.usda --info 2> err.txt; then exit 1; fi
+          cat err.txt
+          grep -q "not a usd-replay" err.txt
+      - name: Render the goldens from the .usdc files and compare
+        run: |
+          tests/golden/render.sh "$PWD/build/replay-player" renders usd
+          imgcmp=$(find build -name strata-imgcmp -type f | head -1)
+          status=0
+          for g in tests/golden/*.png; do
+            "$imgcmp" "$g" "renders/$(basename "$g")" --diff "renders/diff-$(basename "$g")" --json || status=1
+            echo
+          done
+          exit $status
+      - name: Upload the renders
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-usd-renders
+          path: renders/
+          if-no-files-found: ignore
+
+  desktop-windows:
+    # The Windows build with the USD reader (MSVC, Strata's Windows OpenUSD prebuilt). Windows
+    # runners have no OpenGL 4.5, so nothing is drawn here: the model is checked instead.
+    name: Desktop player with OpenUSD (Windows build)
+    runs-on: windows-2022
+    env:
+      OPENUSD_KEY_WIN: openusd-v26.08-windows2022-msvc143-51c7751f88df
+      OPENUSD_SHA256_WIN: 64d06b4f029a77107ba975f3210a14628924ee9b1576d276bd4cebc274c287e8
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch OpenUSD (Strata's prebuilt, SHA-256 checked)
+        run: |
+          curl -fsSL -o openusd.tar.gz \
+            "https://github.com/Preponderous-Software/strata/releases/download/${OPENUSD_KEY_WIN}/${OPENUSD_KEY_WIN}.tar.gz"
+          echo "${OPENUSD_SHA256_WIN}  openusd.tar.gz" | sha256sum -c -
+          mkdir -p /c/openusd
+          tar -C /c/openusd -xzf openusd.tar.gz
+          # OpenUSD finds its plugins next to its DLLs: put them on PATH, never copy them.
+          echo "C:\\openusd\\${OPENUSD_KEY_WIN}\\lib" >> "$GITHUB_PATH"
+          echo "C:\\openusd\\${OPENUSD_KEY_WIN}\\bin" >> "$GITHUB_PATH"
+      - name: Build (MSVC, warnings as errors)
+        run: |
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DREPLAY_PLAYER_WITH_USD=ON \
+            -DREPLAY_PLAYER_WARNINGS_AS_ERRORS=ON -DCMAKE_PREFIX_PATH="C:/openusd/${OPENUSD_KEY_WIN}"
+          cmake --build build --config Release --parallel 4
+      - name: Tests
+        run: ctest --test-dir build -C Release --output-on-failure
+      - name: Native and bundle models agree; the player opens both
+        run: |
+          ./build/Release/replay-compare.exe tests/data/scenario.usda tests/data/scenario
+          for f in tests/corpus/*.usdc; do ./build/Release/replay-compare.exe "$f" "${f%.usdc}"; done
+          ./build/Release/replay-player.exe tests/corpus/kindling-restoration.usdc --info
+          ./build/Release/replay-player.exe tests/corpus/steading-seed42 --info
