@@ -4,7 +4,8 @@ One player for every [`usd-replay/1`](https://github.com/Preponderous-Software/u
 simulation replay, built on the [Strata](https://github.com/Preponderous-Software/strata) engine. It runs on the desktop
 (Linux and Windows) and in the browser (WebGL 2). It plays any file that passes `usd-recorder replay validate` and needs
 no code for any particular simulation: the entity sets, colour fields, stats, legend and state hash all come from the
-replay.
+replay. **Try it in a browser:** <https://replay-player.play.danielstephenson.dev> (steading, microbiome, Beyond
+Nations and Kindling replays, behind a picker).
 
 | microbiome (`mb_strata --record`) | steading (`steading-replay`) |
 |---|---|
@@ -72,10 +73,13 @@ Other options: `--width/--height`, `--speed`, `--paused`, `--no-hud`, `--no-shad
 
 ```sh
 emcmake cmake -S . -B build-web -DREPLAY_PLAYER_WEB=ON -DREPLAY_PLAYER_WITH_STRATA=OFF && cmake --build build-web
-mkdir site && cp web/index.html build-web/replay-player.js build-web/replay-player.wasm site/
-cp -r path/to/bundle site/replay && python3 -m http.server -d site
-# open http://localhost:8000/?data=replay/
+tools/assemble_site.sh build-web site && python3 -m http.server -d site
+# open http://localhost:8000/ (the picker's replays), or copy a bundle into site/ and open ?data=its-dir/
 ```
+
+Every push to `main` deploys the site to <https://replay-player.play.danielstephenson.dev> (arcade, through
+`browser.yml`). The page offers the replays listed in `web/replays/index.json` in a picker and opens the first;
+[web/replays/SOURCES.md](web/replays/SOURCES.md) says where each came from.
 
 Emscripten 6.0.11 (Strata's pin). The page takes `?data=<relative bundle dir>/`, `speed`, `autoplay=0`, `at=<tick>`,
 `interpolate=0` and `shadows=0|1` (shadows are off by default on touch screens). Its layout, controls and test hook
