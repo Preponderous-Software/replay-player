@@ -1,0 +1,8 @@
+{
+  "replays": [
+    { "id": "steading", "label": "steading, seed 42", "data": "replays/steading/" },
+    { "id": "microbiome", "label": "microbiome, seed 1", "data": "replays/microbiome/" },
+    { "id": "beyond-nations", "label": "Beyond Nations, seed 12", "data": "replays/beyond-nations/" },
+    { "id": "kindling", "label": "Kindling: a restoration", "data": "replays/kindling/" }
+  ]
+}

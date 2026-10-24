@@ -138,4 +138,7 @@ Replays and bundles are files from other people.
   for frame rates measured on a desktop GPU and a real phone, and the decision is the owner's.
 - **Open question 7, look:** the fixed sun with shadows on the desktop; in the browser shadows are off on touch screens
   (`?shadows=1` turns them on) and on elsewhere.
-- **Open question 6, hosting:** not decided here; nothing is deployed by this repository's workflows.
+- **Open question 6, hosting:** arcade, as the owner decided on 2026-10-24 (not a per-project embed). `browser.yml`
+  deploys the assembled site to <https://replay-player.play.danielstephenson.dev> with
+  `Stephenson-Software/arcade-deploy@v1` on pushes to `main`; the page ships a few published replays behind a picker
+  (`web/replays/`). usd-web's three.js player stays as it is; both coexist.

@@ -38,6 +38,13 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
 .legend { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 8px; }
 .legend span { display: inline-flex; align-items: center; gap: 6px; }
 .sw { width: 12px; height: 12px; border-radius: 3px; border: 1px solid var(--line); }
+.pick { display: flex; align-items: center; gap: 8px; margin: 8px 0 2px; }
+.pick[hidden] { display: none; }
+.pick span { color: var(--muted); }
+.pick select { flex: 1; min-width: 0; min-height: 36px; border-radius: 8px; border: 1px solid var(--line);
+  background: var(--chip); color: var(--ink); font: 13px system-ui, sans-serif; padding: 0 6px; }
+.pick select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (pointer: coarse) { .pick select { min-height: 44px; font-size: 16px; } }
 .engine { margin-top: 8px; color: var(--muted); font-size: 11px; }
 #bar { position: fixed; left: 12px; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom)); }
 .uwr-controls { display: flex; align-items: center; gap: 10px; background: var(--panel); border: 1px solid var(--line);
@@ -63,6 +70,7 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
 <div id="panel">
   <h1 id="title">Replay</h1>
   <div class="sub" id="sub"></div>
+  <label class="pick" id="pick-row" hidden><span>Replay</span><select id="pick"></select></label>
   <dl class="grid" id="stats"></dl>
   <div class="legend" id="legend"></div>
   <div class="hash" id="hash" title="State hash at this tick: re-running the sim with this seed gives the same value."></div>
@@ -76,8 +84,9 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
   const SPEEDS = [0.25, 0.5, 1, 2, 4, 8];
   const params = new URLSearchParams(location.search);
   // Only a relative path is accepted, so a link cannot point the page at another origin's data.
-  const data = params.get("data") || "replay/";
-  const base = new URL(/^[\w./-]+$/.test(data) && !data.startsWith("/") && !data.includes("..") ? data : "replay/", document.baseURI);
+  const safe = d => typeof d === "string" && /^[\w./-]+$/.test(d) && !d.startsWith("/") && !d.includes("..");
+  const slash = d => d.replace(/\/?$/, "/");
+  let base = null;
   const $ = id => document.getElementById(id);
   const canvas = $("view");
   const reduced = params.get("autoplay") === "0" ||
@@ -211,8 +220,41 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
     requestAnimationFrame(loop);
   }
 
+  // The replays this site offers (replays/index.json, if there is one) fill the picker; without
+  // ?data= the page opens the first. Picking one reloads the page on it.
+  async function choose() {
+    let list = [];
+    try {
+      const r = await fetch(new URL("replays/index.json", document.baseURI));
+      if (r.ok) list = ((await r.json()).replays || []).filter(x => x && safe(x.data) && x.label);
+    } catch (err) { /* no picker */ }
+    const asked = params.get("data");
+    const data = slash(safe(asked) ? asked : list.length ? list[0].data : "replay/");
+    base = new URL(data, document.baseURI);
+    hook.replays = list.length;
+    if (!list.length) return;
+    const sel = $("pick");
+    for (const x of list) {
+      const o = document.createElement("option");
+      o.value = slash(x.data); o.textContent = x.label;
+      sel.append(o);
+    }
+    if (!list.some(x => slash(x.data) === data)) {
+      const o = document.createElement("option");
+      o.value = data; o.textContent = data; sel.prepend(o);
+    }
+    sel.value = data;
+    sel.onchange = () => {
+      const q = new URLSearchParams(location.search);
+      q.set("data", sel.value); q.delete("at");
+      location.search = q.toString();
+    };
+    $("pick-row").hidden = false;
+  }
+
   async function start() {
     resize();
+    await choose();
     if (typeof ResizeObserver !== "undefined") new ResizeObserver(resize).observe(canvas);
     else addEventListener("resize", resize);
     const r = await fetch(new URL("replay.json", base));
