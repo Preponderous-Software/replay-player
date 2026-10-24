@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Assembles the browser site from a web build: the page, the player, the replays it offers in its
-# picker (web/replays, plus Kindling's restoration from the test corpus) and the test bundles.
+# Assembles the browser site from a web build: the page and its ?bench harness, the player, the
+# replays it offers in its picker (web/replays, plus Kindling's restoration from the test corpus)
+# and the test bundles.
 #
 #   tools/assemble_site.sh BUILD_WEB_DIR SITE_DIR
 set -euo pipefail
@@ -10,7 +11,7 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 
 rm -rf "$site"
 mkdir -p "$site/data"
-cp "$root/web/index.html" "$build/replay-player.js" "$build/replay-player.wasm" "$site/"
+cp "$root/web/index.html" "$root/web/bench.js" "$build/replay-player.js" "$build/replay-player.wasm" "$site/"
 
 # The picker's replays (web/replays/index.json lists them).
 cp -r "$root/web/replays" "$site/replays"
