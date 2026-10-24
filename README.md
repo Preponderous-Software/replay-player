@@ -86,6 +86,15 @@ Emscripten 6.0.11 (Strata's pin). The page takes `?data=<relative bundle dir>/`,
 (`window.__usdWebReplay`) are usd-web's `viewer/replay.html`, so one page can stand in for the other. The `.wasm` is
 1.04 MB, **338 KB gzip'd** (the budget is 600 KB), and needs no COOP/COEP headers.
 
+To measure the frame rate on a real device, open the page with `?bench`
+(<https://replay-player.play.danielstephenson.dev/?bench>). Once every chunk is in, it plays the first replay
+(steading, seed 42) from its first sample at 2× while the camera turns once around it, closing in and back out, for
+15 seconds after a short warm-up, then shows the frame rate, the frame time (median and p95), the page's own work per
+frame, the GPU time where the browser offers WebGL 2 timer queries, the canvas size and device pixel ratio and the
+GPU's name, with a button that copies it all as text. `?bench=30` runs for 30 seconds; `data` and `shadows` apply as
+usual. Nothing is sent anywhere. `web/bench.js` is the harness; `web/smoke/bench.cjs` checks in CI that a run
+finishes and shows its card on both profiles (it keeps no numbers: headless Chromium draws on the CPU).
+
 ## Tests
 
 | Check | Where |
@@ -94,7 +103,7 @@ Emscripten 6.0.11 (Strata's pin). The page takes `?data=<relative bundle dir>/`,
 | The C++ UWR1 decoder against usd-web's Python decoder, chunk by chunk | `tests/cross_decode.py` |
 | A `.usdc` read natively and its bundle give the same model (up to quantization) | `tools/replay_compare.cpp` |
 | Golden images drawn headless and compared with Strata's `strata-imgcmp`, from bundles and from `.usdc` | `tests/golden/` |
-| Browser smoke test in headless Chromium, desktop and phone (usd-web's replay smoke checks), and the size budget | `web/smoke/`, `.github/workflows/browser.yml` |
+| Browser smoke test in headless Chromium, desktop and phone (usd-web's replay smoke checks, and `?bench` finishing with its card), and the size budget | `web/smoke/`, `.github/workflows/browser.yml` |
 
 The test corpus (`tests/corpus/`) is a short steading run and Kindling's restoration, each as `.usdc` and as a bundle.
 

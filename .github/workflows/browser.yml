@@ -81,6 +81,13 @@ jobs:
           node web/smoke/capture.cjs http://127.0.0.1:8080/ data/kindling-restoration/ 11700 smoke-out/kindling.png --dark
           node web/smoke/picker.cjs http://127.0.0.1:8080/ smoke-out/picker
 
+      - name: Bench mode completes and shows its card (desktop, iPhone 13 profile; shadows off, slow in SwiftShader)
+        run: |
+          python3 -m http.server 8081 --bind 127.0.0.1 --directory web-site > http-bench.log 2>&1 &
+          sleep 1
+          node web/smoke/bench.cjs "http://127.0.0.1:8081/?bench=3&shadows=0" smoke-out/bench-desktop
+          node web/smoke/bench.cjs "http://127.0.0.1:8081/?bench=3&shadows=0" smoke-out/bench-phone --phone
+
       - name: Upload smoke screenshots
         if: always()
         uses: actions/upload-artifact@v4

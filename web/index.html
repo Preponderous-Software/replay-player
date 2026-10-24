@@ -78,6 +78,8 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
 </div>
 <div id="bar"></div>
 <div id="error"></div>
+<!-- ?bench: a scripted frame-rate run (web/bench.js); it must load before the player. -->
+<script src="bench.js"></script>
 <script>
 "use strict";
 (function () {
@@ -287,6 +289,25 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
     requestAnimationFrame(loop);
     // The rest in order, one at a time, so playback starts on the first chunk.
     for (let i = 1; i < doc.chunks.length; i++) await loadChunk(i).catch(fail);
+    if (window.StrataBench && StrataBench.requested) bench();
+  }
+
+  // ?bench, once every chunk is in: the replay from its first sample at 2×, with the camera
+  // turning once around it, closing in and back out. rp_orbit and rp_zoom are relative, so each
+  // frame moves the camera by the path's step since the last; the path depends only on the time
+  // into the run, so runs on different devices are comparable.
+  function bench() {
+    const turn = 2 * Math.PI / 0.005;  // rp_orbit's pixels for a full turn
+    const dist = u => 1 - 0.35 * Math.sin(Math.PI * u);
+    let at = 0;
+    StrataBench.run({
+      name: "replay-player",
+      scene: `${doc.title}, from the start at 2×, one orbit, shadows ${shadows ? "on" : "off"}`,
+      canvas,
+      setup: () => { pause(); call("rp_reset_view"); call("rp_seek_sample", 0); setSpeed(2); play_(); },
+      path: u => { call("rp_orbit", turn * (u - at), 0); call("rp_zoom", dist(u) / dist(at)); at = u; },
+      onDone: () => pause(),  // the results card over a still replay
+    });
   }
 
   hook.play = () => play_();
