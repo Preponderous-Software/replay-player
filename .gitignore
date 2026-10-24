@@ -1,0 +1,10 @@
+/build*/
+/site/
+/web-site/
+/smoke-out/
+/renders/
+/frames/
+/fresh/
+node_modules/
+__pycache__/
+*.pyc
