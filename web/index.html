@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>replay-player</title>
+<link rel="icon" href="data:,">
+<meta name="description" content="Plays a usd-replay/1 simulation replay (a usd-web bundle) on the Strata engine in WebGL 2.">
+<style>
+/* The layout, controls and test hook follow usd-web's viewer/replay.html, so one page can stand
+   in for the other and one smoke test drives either. */
+:root {
+  --bg: #1b2026; --panel: rgba(255,255,255,0.94); --ink: #1d232b; --muted: #5b6672;
+  --line: rgba(0,0,0,0.12); --chip: #eef2f6; --accent: #2f6fde;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --panel: rgba(22,27,34,0.92); --ink: #e6edf3; --muted: #9aa6b2; --line: rgba(255,255,255,0.14);
+    --chip: #232a33; --accent: #6ea8ff;
+  }
+}
+:root[data-theme="dark"] {
+  --panel: rgba(22,27,34,0.92); --ink: #e6edf3; --muted: #9aa6b2; --line: rgba(255,255,255,0.14);
+  --chip: #232a33; --accent: #6ea8ff;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
+  font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; overflow: hidden; }
+#view { position: fixed; inset: 0; width: 100%; height: 100%; display: block; outline: none; touch-action: none; }
+#panel { position: fixed; top: 12px; left: 12px; width: 280px; max-height: calc(100% - 100px); overflow: auto;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+#panel h1 { font-size: 15px; margin: 0 0 2px; }
+.sub { color: var(--muted); font-size: 12px; }
+.hash { font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); word-break: break-all; }
+.grid { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin-top: 8px; }
+.grid dt { color: var(--muted); }
+.grid dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 8px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.sw { width: 12px; height: 12px; border-radius: 3px; border: 1px solid var(--line); }
+.engine { margin-top: 8px; color: var(--muted); font-size: 11px; }
+#bar { position: fixed; left: 12px; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom)); }
+.uwr-controls { display: flex; align-items: center; gap: 10px; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 12px; padding: 8px 10px; }
+.uwr-btn { min-width: 64px; min-height: 44px; border-radius: 8px; border: 1px solid var(--line); background: var(--chip);
+  color: var(--ink); font: 600 14px system-ui, sans-serif; cursor: pointer; }
+.uwr-btn:focus-visible, .uwr-range:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.uwr-range { flex: 1; min-width: 0; height: 44px; accent-color: var(--accent); }
+.uwr-tick { min-width: 150px; text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+#error { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; padding: 24px; text-align: center; color: #e6edf3; }
+@media (max-width: 640px) {
+  #panel { left: 8px; right: 8px; top: calc(8px + env(safe-area-inset-top)); width: auto; max-height: 34%; padding: 10px 12px; }
+  .grid { grid-template-columns: repeat(2, auto 1fr); }
+  #bar { left: 8px; right: 8px; bottom: calc(8px + env(safe-area-inset-bottom)); }
+  .uwr-controls { flex-wrap: wrap; gap: 6px 8px; }
+  .uwr-range { order: -1; flex-basis: 100%; }
+  .uwr-tick { flex: 1; min-width: 0; }
+}
+</style>
+</head>
+<body>
+<canvas id="view" aria-label="Replay view: drag to orbit, pinch or wheel to zoom"></canvas>
+<div id="panel">
+  <h1 id="title">Replay</h1>
+  <div class="sub" id="sub"></div>
+  <dl class="grid" id="stats"></dl>
+  <div class="legend" id="legend"></div>
+  <div class="hash" id="hash" title="State hash at this tick: re-running the sim with this seed gives the same value."></div>
+  <div class="engine">replay-player on Strata (WebGL 2)</div>
+</div>
+<div id="bar"></div>
+<div id="error"></div>
+<script>
+"use strict";
+(function () {
+  const SPEEDS = [0.25, 0.5, 1, 2, 4, 8];
+  const params = new URLSearchParams(location.search);
+  // Only a relative path is accepted, so a link cannot point the page at another origin's data.
+  const data = params.get("data") || "replay/";
+  const base = new URL(/^[\w./-]+$/.test(data) && !data.startsWith("/") && !data.includes("..") ? data : "replay/", document.baseURI);
+  const $ = id => document.getElementById(id);
+  const canvas = $("view");
+  const reduced = params.get("autoplay") === "0" ||
+    !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+  const coarse = !!(window.matchMedia && window.matchMedia("(pointer: coarse)").matches);
+  const shadows = params.has("shadows") ? params.get("shadows") !== "0" : !coarse;
+  const fmt = v => v === null || v === undefined ? "–" : Number.isInteger(v) ? v.toLocaleString() : v.toFixed(3);
+  const hook = { ready: false, samples: 0, chunks: 0, loaded: 0, tick: null, sample: 0, hash: null, playing: false,
+    frames: 0, errors: [], engine: "strata" };
+  window.__usdWebReplay = hook;
+  function fail(err) { hook.errors.push(String(err && err.message || err)); console.warn("replay-player:", err); }
+  function showError(text) { $("error").textContent = text; $("error").style.display = "flex"; }
+
+  let doc = null, M = null, ui = null, speed = Number(params.get("speed")) || 1, userMoved = false, last = null;
+
+  function call(name, ...args) { return M["_" + name](...args); }
+  function withBytes(u8, fn) {
+    const p = M._malloc(Math.max(1, u8.length));
+    M.HEAPU8.set(u8, p);
+    try { return fn(p, u8.length); } finally { M._free(p); }
+  }
+  async function gunzip(buf) {
+    const u8 = new Uint8Array(buf);
+    if (u8.length < 2 || u8[0] !== 0x1f || u8[1] !== 0x8b) return u8;
+    const stream = new Blob([u8]).stream().pipeThrough(new DecompressionStream("gzip"));
+    return new Uint8Array(await new Response(stream).arrayBuffer());
+  }
+  async function loadChunk(i) {
+    const meta = doc.chunks[i];
+    const r = await fetch(new URL(meta.file, base));
+    if (!r.ok) throw new Error(`${meta.file}: HTTP ${r.status}`);
+    const u8 = await gunzip(await r.arrayBuffer());
+    if (withBytes(u8, (p, n) => call("rp_add_chunk", i, p, n)) !== 0) throw new Error(M.UTF8ToString(call("rp_last_error")));
+    hook.loaded++;
+  }
+  function state() { return JSON.parse(M.UTF8ToString(call("rp_state"))); }
+
+  // ---- controls (usd-web's markup and classes) ----
+  function buildControls() {
+    const host = $("bar");
+    host.replaceChildren();
+    host.classList.add("uwr-controls");
+    const el = (tag, cls) => { const e = document.createElement(tag); e.className = cls; return e; };
+    const play = el("button", "uwr-btn uwr-play"); play.type = "button";
+    const range = el("input", "uwr-range");
+    range.type = "range"; range.min = "0"; range.max = String(Math.max(0, doc.samples - 1)); range.step = "1"; range.value = "0";
+    range.setAttribute("aria-label", "Timeline");
+    const spd = el("button", "uwr-btn uwr-speed"); spd.type = "button"; spd.setAttribute("aria-label", "Playback speed");
+    const label = el("span", "uwr-tick"); label.setAttribute("aria-live", "off");
+    play.onclick = () => (hook.playing ? pause() : play_());
+    spd.onclick = () => { const i = SPEEDS.indexOf(speed); setSpeed(SPEEDS[(i + 1) % SPEEDS.length]); };
+    range.oninput = () => { call("rp_seek_sample", Number(range.value)); render(); };
+    host.append(play, range, spd, label);
+    ui = { play, range, spd, label };
+  }
+  let shownSample = -1;
+  function update(force) {
+    const s = state();
+    hook.tick = s.tick; hook.sample = s.sample; hook.hash = s.hash; hook.playing = s.playing;
+    if (ui) {
+      ui.play.textContent = s.playing ? "Pause" : "Play";
+      ui.play.setAttribute("aria-label", s.playing ? "Pause" : "Play");
+      ui.spd.textContent = `${speed}×`;
+      if (document.activeElement !== ui.range || s.playing) ui.range.value = String(s.sample);
+      ui.label.textContent = `tick ${s.tick.toLocaleString()} / ${doc.ticks[doc.samples - 1].toLocaleString()}`;
+    }
+    if (s.sample === shownSample && !force) return;
+    shownSample = s.sample;
+    $("hash").textContent = `tick ${s.tick.toLocaleString()} · state ${s.hash}`;
+    const dl = $("stats"), names = Object.keys(s.stats);
+    if (dl.childElementCount !== 2 * names.length) {
+      dl.replaceChildren();
+      for (const name of names) {
+        const dt = document.createElement("dt"); dt.textContent = name;
+        const dd = document.createElement("dd"); dd.dataset.stat = name;
+        dl.append(dt, dd);
+      }
+    }
+    for (const dd of dl.querySelectorAll("dd")) dd.textContent = fmt(s.stats[dd.dataset.stat]);
+  }
+  function play_() { call("rp_play"); last = null; update(); }
+  function pause() { call("rp_pause"); update(); }
+  function setSpeed(v) { speed = v; hook.speed = v; call("rp_set_speed", v); update(); }
+  function seek(tick) { call("rp_seek", tick); render(); }
+  function render() { if (call("rp_frame", 0, 1)) hook.frames++; update(); return hook.frames; }
+
+  // ---- input: orbit, pan, pinch, wheel, keys (as usd-web) ----
+  const pointers = new Map();
+  let pinch0 = null;
+  canvas.tabIndex = 0;
+  canvas.addEventListener("pointerdown", e => {
+    userMoved = true; canvas.setPointerCapture(e.pointerId);
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, b: e.button, s: e.shiftKey }); pinch0 = null;
+  });
+  const up = e => { pointers.delete(e.pointerId); pinch0 = null; };
+  canvas.addEventListener("pointerup", up);
+  canvas.addEventListener("pointercancel", up);
+  canvas.addEventListener("pointermove", e => {
+    const p = pointers.get(e.pointerId);
+    if (!p || !M) return;
+    const dx = e.clientX - p.x, dy = e.clientY - p.y;
+    p.x = e.clientX; p.y = e.clientY;
+    if (pointers.size >= 2) {
+      const [a, b] = [...pointers.values()], d = Math.hypot(a.x - b.x, a.y - b.y);
+      if (pinch0) call("rp_zoom", pinch0 / Math.max(d, 1));
+      pinch0 = d;
+      call("rp_pan", dx / 2, dy / 2);
+    } else if (p.b === 2 || p.s) call("rp_pan", dx, dy);
+    else call("rp_orbit", dx, dy);
+  });
+  canvas.addEventListener("wheel", e => { e.preventDefault(); userMoved = true; if (M) call("rp_zoom", Math.exp(e.deltaY * 0.001)); }, { passive: false });
+  canvas.addEventListener("contextmenu", e => e.preventDefault());
+  document.body.addEventListener("keydown", e => {
+    if (!doc || e.defaultPrevented || e.target && /^(BUTTON|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
+    if (e.target && e.target.tagName === "INPUT" && e.target !== (ui && ui.range)) return;
+    if (e.key === " " || e.key === "k") { e.preventDefault(); hook.playing ? pause() : play_(); }
+    else if (e.key === "ArrowRight" && e.target !== (ui && ui.range)) { call("rp_step", 1); render(); }
+    else if (e.key === "ArrowLeft" && e.target !== (ui && ui.range)) { call("rp_step", -1); render(); }
+  });
+
+  function resize() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const w = Math.max(1, Math.round((canvas.clientWidth || innerWidth) * dpr));
+    const h = Math.max(1, Math.round((canvas.clientHeight || innerHeight) * dpr));
+    if (M) call("rp_resize", w, h, userMoved ? 0 : 1);
+  }
+  function loop(now) {
+    const dt = last === null ? 0 : (now - last) / 1000;
+    last = now;
+    if (call("rp_frame", dt, 0)) { hook.frames++; update(); }
+    requestAnimationFrame(loop);
+  }
+
+  async function start() {
+    resize();
+    if (typeof ResizeObserver !== "undefined") new ResizeObserver(resize).observe(canvas);
+    else addEventListener("resize", resize);
+    const r = await fetch(new URL("replay.json", base));
+    if (!r.ok) throw new Error(`replay.json: HTTP ${r.status}`);
+    const text = await r.text();
+    doc = JSON.parse(text);
+    const bytes = new TextEncoder().encode(text);
+    if (withBytes(bytes, (p, n) => call("rp_open", p, n)) !== 0) throw new Error(M.UTF8ToString(call("rp_last_error")));
+    call("rp_set_shadows", shadows ? 1 : 0);
+    call("rp_set_speed", speed);
+    if (params.get("interpolate") === "0") call("rp_set_interpolate", 0);
+    hook.samples = doc.samples;
+    hook.chunks = doc.chunks.length;
+    document.title = `${doc.title} · replay-player`;
+    $("title").textContent = doc.title;
+    const m = doc.meta || {};
+    $("sub").textContent = `${m.sim || "sim"} ${m.simVersion || ""} · seed ${m.seed ?? "?"} · ${doc.samples.toLocaleString()} samples`;
+    for (const s of doc.sets) {
+      const item = document.createElement("span"), sw = document.createElement("i");
+      sw.className = "sw"; sw.style.background = s.color || "linear-gradient(90deg,#e66,#6c6,#69e)";
+      item.append(sw, document.createTextNode(s.label));
+      $("legend").append(item);
+    }
+    await loadChunk(0);
+    buildControls();
+    if (params.has("at")) call("rp_seek", Number(params.get("at")));
+    render();
+    hook.ready = true;
+    if (!reduced) play_();
+    requestAnimationFrame(loop);
+    // The rest in order, one at a time, so playback starts on the first chunk.
+    for (let i = 1; i < doc.chunks.length; i++) await loadChunk(i).catch(fail);
+  }
+
+  hook.play = () => play_();
+  hook.pause = () => pause();
+  hook.seek = t => seek(t);
+  hook.render = () => render();
+
+  window.Module = {
+    canvas,
+    print: t => console.log(t),
+    printErr: t => console.warn(t),
+    onRuntimeInitialized() {
+      M = window.Module;
+      start().catch(err => { fail(err); showError("Could not load the replay: " + (err && err.message || err)); });
+    },
+  };
+  if (!window.WebAssembly || !document.createElement("canvas").getContext("webgl2")) {
+    showError("This player needs WebGL 2 and WebAssembly, which this browser has turned off or does not support.");
+  }
+})();
+</script>
+<script src="replay-player.js"></script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+{
+  "name": "replay-player-web-smoke",
+  "private": true,
+  "description": "Headless Chromium smoke test and screenshots for replay-player's browser build",
+  "dependencies": {
+    "playwright": "1.61.1"
+  }
+}
