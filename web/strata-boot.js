@@ -3,8 +3,8 @@
    Strata commit).
 
    The loader expects a MODULARIZE build (a factory it calls with wasmBinary).
-   This build is a classic one: a global Module and the glue script that
-   emcc writes for {{{ SCRIPT }}}, which the shell keeps inside
+   This build is a classic one: a global Module and the glue script
+   (replay-player.js), which the page keeps inside
    <template id="strata-glue"> so that it does not run by itself. This file
    bridges the two:
 
@@ -26,7 +26,7 @@
      StrataBoot.ready();
 
    `bytes` defaults to data-bytes on the template, which the build stamps
-   (web/strata_page.cmake): the .wasm plus any data package, since the arcade
+   (tools/assemble_site.sh): the .wasm plus any data package, since the arcade
    compresses on the fly and sends no Content-Length.
 
    MIT licensed, as this repository. */
