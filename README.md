@@ -95,6 +95,17 @@ GPU's name, with a button that copies it all as text. `?bench=30` runs for 30 se
 usual. Nothing is sent anywhere. `web/bench.js` is the harness; `web/smoke/bench.cjs` checks in CI that a run
 finishes and shows its card on both profiles (it keeps no numbers: headless Chromium draws on the CPU).
 
+The page loads behind the Strata web kit's loading shell (`web/strata-kit/strata-loader.js`, vendored from Strata at
+the commit in `web/strata-kit/PIN`; `web/strata-kit/update.sh <sha>` re-vendors it): the /play trailer's first frame
+as a blurred backdrop and real progress with the size. The loader streams `replay-player.wasm` and hands its bytes to
+the engine, so nothing downloads twice. Without WebGL 2, or when the engine stops or a lost WebGL context does not
+come back, it plays the trailer instead (the still under `prefers-reduced-motion`) and says why; a device drawing
+under 12 frames a second is offered the clip without losing the player (not in automated browsers or `?bench` runs).
+`web/strata-boot.js` bridges the classic (non-`MODULARIZE`) build to the loader: the player's `<script>` sits inert
+in `<template id="strata-glue">`, the bridge starts it, and the engine waits in `Module.instantiateWasm` for the
+loader's bytes. `tools/assemble_site.sh` copies both next to the page and stamps the `.wasm`'s size on the template,
+because the arcade compresses on the fly and sends no `Content-Length`.
+
 ## Tests
 
 | Check | Where |

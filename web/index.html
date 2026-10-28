@@ -12,6 +12,8 @@
 :root {
   --bg: #1b2026; --panel: rgba(255,255,255,0.94); --ink: #1d232b; --muted: #5b6672;
   --line: rgba(0,0,0,0.12); --chip: #eef2f6; --accent: #2f6fde;
+  /* The loading shell (web/strata-kit/strata-loader.js): its own dark panel, with this page's accent. */
+  --sk-loader-bg: var(--bg); --sk-loader-accent: var(--accent);
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -285,6 +287,7 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
     if (params.has("at")) call("rp_seek", Number(params.get("at")));
     render();
     hook.ready = true;
+    StrataBoot.ready();
     if (!reduced) play_();
     requestAnimationFrame(loop);
     // The rest in order, one at a time, so playback starts on the first chunk.
@@ -324,11 +327,29 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
       start().catch(err => { fail(err); showError("Could not load the replay: " + (err && err.message || err)); });
     },
   };
-  if (!window.WebAssembly || !document.createElement("canvas").getContext("webgl2")) {
-    showError("This player needs WebGL 2 and WebAssembly, which this browser has turned off or does not support.");
-  }
 })();
 </script>
-<script src="replay-player.js"></script>
+<!-- The player's script, kept inert: strata-boot.js starts it behind the loading
+     shell. data-bytes is the .wasm's size, stamped by tools/assemble_site.sh. -->
+<template id="strata-glue" data-bytes="0"><script src="replay-player.js"></script></template>
+<!-- The loading shell, vendored from Strata, and its bridge to this build. -->
+<script src="strata-kit/strata-loader.js"></script>
+<script src="strata-boot.js"></script>
+<script>
+  // The loading shell: the trailer's first frame behind real progress, and the
+  // trailer itself, with the reason, if the player can't run here (no WebGL 2,
+  // the engine stops, a lost context). The media are the /play trailer.
+  StrataBoot.start({
+    wasm: "replay-player.wasm",
+    title: "replay-player",
+    poster: "https://danielstephenson.dev/trailers/replay-player.jpg",
+    posterAlt: "replay-player playing a steading replay",
+    trailer: { webm: "https://danielstephenson.dev/trailers/replay-player.webm",
+               mp4: "https://danielstephenson.dev/trailers/replay-player.mp4" },
+    trailerLabel: "A recorded clip of replay-player",
+    fallback: { href: "https://danielstephenson.dev/play", text: "More games" },
+    canvas: document.getElementById("view"),
+  }).catch(() => {});  // the loading shell already shows why
+</script>
 </body>
 </html>

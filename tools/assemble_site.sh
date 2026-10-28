@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Assembles the browser site from a web build: the page and its ?bench harness, the player, the
+# Assembles the browser site from a web build: the page, its loading shell and ?bench harness, the player, the
 # replays it offers in its picker (web/replays, plus Kindling's restoration from the test corpus)
 # and the test bundles.
 #
@@ -12,6 +12,14 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 rm -rf "$site"
 mkdir -p "$site/data"
 cp "$root/web/index.html" "$root/web/bench.js" "$build/replay-player.js" "$build/replay-player.wasm" "$site/"
+# The loading shell (web/strata-kit, vendored from Strata) and its bridge to this build, and the
+# .wasm's size on the page: the arcade compresses on the fly and sends no Content-Length.
+cp "$root/web/strata-boot.js" "$site/"
+mkdir -p "$site/strata-kit"
+cp "$root/web/strata-kit/strata-loader.js" "$root/web/strata-kit/LICENSE" "$site/strata-kit/"
+bytes=$(wc -c < "$build/replay-player.wasm")
+grep -q 'data-bytes="0"' "$site/index.html"
+sed -i "s/data-bytes=\"0\"/data-bytes=\"$bytes\"/" "$site/index.html"
 
 # The picker's replays (web/replays/index.json lists them).
 cp -r "$root/web/replays" "$site/replays"

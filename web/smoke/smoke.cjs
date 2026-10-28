@@ -92,6 +92,9 @@ function check(cond, what) {
     await page.screenshot({ path: path.join(out, "desktop.png") });
     check((await page.evaluate(`${HOOK}.errors`)).length === 0, "the hook reports no errors");
     check(errors.length === 0, "no console errors" + (errors.length ? ": " + errors.join(" | ") : ""));
+    await page.waitForFunction(() => { const r = document.querySelector(".sk-loader"); return r && r.hidden; }, null, { timeout: 10000 }).catch(() => {});
+    check(await page.evaluate(() => StrataLoader.state === "done" && document.querySelector(".sk-loader").hidden),
+      "the loading shell showed and is gone");
 
     // Frame rate while playing (SwiftShader: a floor, not a measurement of a GPU).
     await page.evaluate(`${HOOK}.play()`);
@@ -113,6 +116,28 @@ function check(cond, what) {
     await phone.waitForFunction(`${HOOK}.playing && ${HOOK}.tick > 0`, null, { timeout: 30000 });
     check(true, "a tap plays");
     await phone.screenshot({ path: path.join(out, "phone.png") });
+
+    // Without WebGL 2 the loading shell shows the trailer (or its still) and says
+    // why, and the player never downloads.
+    const bare = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+    await bare.addInitScript(() => {
+      const get = HTMLCanvasElement.prototype.getContext;
+      HTMLCanvasElement.prototype.getContext = function (t, o) { return t === "webgl2" ? null : get.call(this, t, o); };
+    });
+    const p2 = await bare.newPage();
+    const engine = [];
+    p2.on("request", r => { if (/replay-player\.(wasm|js)$/.test(r.url())) engine.push(r.url()); });
+    await p2.goto(`${base}?data=${encodeURIComponent(data)}`, { waitUntil: "commit" });
+    await p2.waitForFunction(() => window.StrataLoader && StrataLoader.state === "fallback", null, { timeout: 30000 });
+    const fb = await p2.evaluate(() => {
+      const r = document.querySelector(".sk-loader");
+      return { text: r.innerText, media: !!r.querySelector("video, img"), wide: document.documentElement.scrollWidth > innerWidth };
+    });
+    await p2.screenshot({ path: path.join(out, "no-webgl2.png") });
+    check(/WebGL 2/.test(fb.text) && fb.media && !fb.wide, "without WebGL 2 the shell shows the trailer and says why");
+    check(engine.length === 0, "and nothing of the player downloads");
+    await bare.close();
+
     console.log("smoke: all checks passed");
   } finally {
     await browser.close();
